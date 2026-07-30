@@ -17,12 +17,12 @@ export default function Home() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const phaseRef = useRef<Phase>("menu");
   const input = useRef({ left:false,right:false,gas:false,brake:false,boost:false });
-  const tilt = useRef({ enabled:false, steer:0 });
+  const joystick = useRef({ steer:0, pointerId:-1 });
   const voiceRecognition = useRef<VoiceRecognition|null>(null);
   const voiceEnabled = useRef(false);
   const game = useRef({ cars:[] as Car[], particles:[] as Particle[], pickups:[] as Pickup[], mines:[] as Mine[], time:75, boost:100, boostTime:0, boostCooldown:0, score:0, shake:0 });
   const [phase,setPhaseState] = useState<Phase>("menu");
-  const [tiltOn,setTiltOn] = useState(false);
+  const [stickX,setStickX] = useState(0);
   const [voiceStatus,setVoiceStatus] = useState<"off"|"listening"|"unsupported">("off");
   const [hud,setHud] = useState({hp:100,time:75,boost:100,score:0,alive:6,rank:1,mine:true});
 
@@ -73,17 +73,16 @@ export default function Home() {
     voiceEnabled.current=true;
     try{voiceRecognition.current.start();setVoiceStatus("listening");}catch{}
   };
-  const start = () => { init();startVoiceMine();if(!tilt.current.enabled)toggleTilt();setPhase("countdown");setTimeout(()=>setPhase("playing"),2200); };
-  const toggleTilt = async () => {
-    if (tilt.current.enabled) {
-      tilt.current.enabled=false; tilt.current.steer=0; setTiltOn(false); return;
-    }
-    const Orientation = DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?:()=>Promise<string> };
-    if (Orientation.requestPermission) {
-      const permission=await Orientation.requestPermission();
-      if(permission!=="granted") return;
-    }
-    tilt.current.enabled=true; setTiltOn(true);
+  const start = () => { init();setPhase("countdown");setTimeout(()=>setPhase("playing"),2200); };
+  const moveJoystick = (e:React.PointerEvent<HTMLElement>) => {
+    if(joystick.current.pointerId!==e.pointerId)return;
+    const rect=e.currentTarget.getBoundingClientRect();
+    const x=Math.max(-1,Math.min(1,(e.clientX-(rect.left+rect.width/2))/(rect.width*.34)));
+    joystick.current.steer=x;setStickX(x);
+  };
+  const releaseJoystick = (e:React.PointerEvent<HTMLElement>) => {
+    if(joystick.current.pointerId!==e.pointerId)return;
+    joystick.current.pointerId=-1;joystick.current.steer=0;setStickX(0);
   };
   const bind = (key:keyof typeof input.current) => ({
     onPointerDown:(e:React.PointerEvent)=>{ e.preventDefault(); input.current[key]=true; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); },
@@ -99,8 +98,6 @@ export default function Home() {
     resize(); addEventListener("resize",resize);
     const key=(e:KeyboardEvent,v:boolean)=>{if(["ArrowDown","s","S"].includes(e.key))input.current.brake=v;if(e.code==="Space"&&v)triggerBoost(); };
     const kd=(e:KeyboardEvent)=>key(e,true), ku=(e:KeyboardEvent)=>key(e,false);addEventListener("keydown",kd);addEventListener("keyup",ku);
-    const orient=(e:DeviceOrientationEvent)=>{ if(tilt.current.enabled) tilt.current.steer=Math.max(-1,Math.min(1,(e.gamma||0)/24)); };
-    addEventListener("deviceorientation",orient);
     function spark(x:number,y:number,color:string,n=8){ for(let i=0;i<n;i++){const a=Math.random()*TAU,s=90+Math.random()*260;game.current.particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:.25+Math.random()*.35,color});}}
     function update(dt:number){
       const g=game.current;if(phaseRef.current!=="playing")return;
@@ -108,7 +105,7 @@ export default function Home() {
       g.boostTime=Math.max(0,g.boostTime-dt);g.boostCooldown=Math.max(0,g.boostCooldown-dt);
       const p=g.cars[0]; if(p.dead)return;
       const inp=input.current; const speed=Math.hypot(p.vx,p.vy);
-      const steer=tilt.current.enabled?tilt.current.steer:0;
+      const steer=joystick.current.steer;
       p.a+=Math.max(-1,Math.min(1,steer))*3.05*dt*(.45+Math.min(speed/210,1));
       let thrust=420;if(inp.brake)thrust=-230;
       if(g.boostTime>0){thrust=760;if(Math.random()<.75)spark(p.x-Math.cos(p.a)*38,p.y-Math.sin(p.a)*38,Math.random()>.45?"#42e8ff":"#d8ff45",2);}
@@ -244,7 +241,7 @@ export default function Home() {
       const vignette=ctx.createRadialGradient(w/2,h/2,Math.min(w,h)*.25,w/2,h/2,Math.max(w,h)*.72);vignette.addColorStop(.55,"transparent");vignette.addColorStop(1,"rgba(0,0,0,.65)");ctx.fillStyle=vignette;ctx.fillRect(0,0,w,h);
     }
     function loop(now:number){const dt=Math.min(.033,(now-last)/1000);last=now;update(dt);draw();raf=requestAnimationFrame(loop)}raf=requestAnimationFrame(loop);
-    return()=>{cancelAnimationFrame(raf);removeEventListener("resize",resize);removeEventListener("keydown",kd);removeEventListener("keyup",ku);removeEventListener("deviceorientation",orient)};
+    return()=>{cancelAnimationFrame(raf);removeEventListener("resize",resize);removeEventListener("keydown",kd);removeEventListener("keyup",ku)};
   },[init]);
 
   const playerPlace=game.current.cars[0]?.place||hud.rank;
@@ -262,10 +259,12 @@ export default function Home() {
     {(phase==="playing"||phase==="countdown")&&<div className="meters">
       <label>내구도 <b>{hud.hp}</b><span><i style={{width:`${hud.hp}%`}}/></span></label>
       <label>부스터 <b>{hud.boost===100?"READY":`${Math.ceil((100-hud.boost)*.03)}초`}</b><span className="blue"><i style={{width:`${hud.boost}%`}}/></span></label>
-      <button className={`tilt-toggle ${tiltOn?"active":""}`} onClick={toggleTilt}>◒ {tiltOn?"기울기 조작 ON":"기울기 조작"}</button>
-      <div className={`voice-status ${voiceStatus}`}>🎙 {voiceStatus==="listening"?(hud.mine?"“지뢰!” 대기 중":"지뢰 사용 완료"):voiceStatus==="unsupported"?"음성 미지원":"마이크 꺼짐"}</div>
+      <div className="sensor-off">센서 OFF · 조이스틱 조작</div>
     </div>}
     {(phase==="playing"||phase==="countdown")&&<div className="controls">
+      <div className="joystick" aria-label="방향 조이스틱" onPointerDown={(e)=>{e.preventDefault();joystick.current.pointerId=e.pointerId;e.currentTarget.setPointerCapture(e.pointerId);moveJoystick(e)}} onPointerMove={moveJoystick} onPointerUp={releaseJoystick} onPointerCancel={releaseJoystick}>
+        <div className="joystick-knob" style={{transform:`translate(${stickX*34}px,-50%)`}} />
+      </div>
       <div className="pedals"><button className="mine" aria-label="지뢰 설치" disabled={!hud.mine} onPointerDown={(e)=>{e.preventDefault();dropMine()}}><span>✹</span>{hud.mine?"MINE":"USED"}</button><button className="brake" aria-label="브레이크" {...bind("brake")}>BRAKE</button><button className="nitro" aria-label="부스터" disabled={hud.boost<100} onPointerDown={(e)=>{e.preventDefault();triggerBoost()}}><span>{hud.boost===100?"⚡":Math.ceil((100-hud.boost)*.03)}</span>{hud.boost===100?"BOOST":"COOL"}</button></div>
     </div>}
     {phase==="menu"&&<section className="panel intro"><div className="eyebrow">6인 배틀 아레나</div><h1>BUMPER<br/><em>RUSH</em></h1><p>박고, 버티고, 끝까지 살아남아라!</p><button onClick={start}>경기 시작 <span>→</span></button><div className="tips"><span>◒ 기울기 조향</span><span>자동 전진</span><span>⚡ 부스터</span></div></section>}
