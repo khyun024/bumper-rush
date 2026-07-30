@@ -73,7 +73,7 @@ export default function Home() {
     voiceEnabled.current=true;
     try{voiceRecognition.current.start();setVoiceStatus("listening");}catch{}
   };
-  const start = () => { init(); startVoiceMine(); setPhase("countdown"); setTimeout(()=>setPhase("playing"),2200); };
+  const start = () => { init();startVoiceMine();if(!tilt.current.enabled)toggleTilt();setPhase("countdown");setTimeout(()=>setPhase("playing"),2200); };
   const toggleTilt = async () => {
     if (tilt.current.enabled) {
       tilt.current.enabled=false; tilt.current.steer=0; setTiltOn(false); return;
@@ -97,7 +97,7 @@ export default function Home() {
     let raf=0,last=performance.now(),hudTick=0;
     const resize=()=>{ const d=Math.min(devicePixelRatio,2); c.width=innerWidth*d;c.height=innerHeight*d;c.style.width=innerWidth+"px";c.style.height=innerHeight+"px";ctx.setTransform(d,0,0,d,0,0); };
     resize(); addEventListener("resize",resize);
-    const key=(e:KeyboardEvent,v:boolean)=>{ if(["ArrowLeft","a","A"].includes(e.key))input.current.left=v;if(["ArrowRight","d","D"].includes(e.key))input.current.right=v;if(["ArrowUp","w","W"].includes(e.key))input.current.gas=v;if(["ArrowDown","s","S"].includes(e.key))input.current.brake=v;if(e.code==="Space"&&v)triggerBoost(); };
+    const key=(e:KeyboardEvent,v:boolean)=>{if(["ArrowDown","s","S"].includes(e.key))input.current.brake=v;if(e.code==="Space"&&v)triggerBoost(); };
     const kd=(e:KeyboardEvent)=>key(e,true), ku=(e:KeyboardEvent)=>key(e,false);addEventListener("keydown",kd);addEventListener("keyup",ku);
     const orient=(e:DeviceOrientationEvent)=>{ if(tilt.current.enabled) tilt.current.steer=Math.max(-1,Math.min(1,(e.gamma||0)/24)); };
     addEventListener("deviceorientation",orient);
@@ -108,9 +108,9 @@ export default function Home() {
       g.boostTime=Math.max(0,g.boostTime-dt);g.boostCooldown=Math.max(0,g.boostCooldown-dt);
       const p=g.cars[0]; if(p.dead)return;
       const inp=input.current; const speed=Math.hypot(p.vx,p.vy);
-      const steer=((inp.right?1:0)-(inp.left?1:0))+(tilt.current.enabled?tilt.current.steer:0);
+      const steer=tilt.current.enabled?tilt.current.steer:0;
       p.a+=Math.max(-1,Math.min(1,steer))*3.05*dt*(.45+Math.min(speed/210,1));
-      let thrust=(inp.gas||tilt.current.enabled)?420:0;if(inp.brake)thrust=-230;
+      let thrust=420;if(inp.brake)thrust=-230;
       if(g.boostTime>0){thrust=760;if(Math.random()<.75)spark(p.x-Math.cos(p.a)*38,p.y-Math.sin(p.a)*38,Math.random()>.45?"#42e8ff":"#d8ff45",2);}
       p.vx+=Math.cos(p.a)*thrust*dt;p.vy+=Math.sin(p.a)*thrust*dt;
       g.cars.forEach((car,i)=>{
@@ -266,10 +266,9 @@ export default function Home() {
       <div className={`voice-status ${voiceStatus}`}>🎙 {voiceStatus==="listening"?(hud.mine?"“지뢰!” 대기 중":"지뢰 사용 완료"):voiceStatus==="unsupported"?"음성 미지원":"마이크 꺼짐"}</div>
     </div>}
     {(phase==="playing"||phase==="countdown")&&<div className="controls">
-      <div className="steer"><button aria-label="왼쪽으로 조향" {...bind("left")}>‹</button><button aria-label="오른쪽으로 조향" {...bind("right")}>›</button></div>
-      <div className="pedals"><button className="mine" aria-label="지뢰 설치" disabled={!hud.mine} onPointerDown={(e)=>{e.preventDefault();dropMine()}}><span>✹</span>{hud.mine?"MINE":"USED"}</button><button className="brake" aria-label="브레이크" {...bind("brake")}>BRAKE</button><button className="gas" aria-label="가속" {...bind("gas")}>GO</button><button className="nitro" aria-label="부스터" disabled={hud.boost<100} onPointerDown={(e)=>{e.preventDefault();triggerBoost()}}><span>{hud.boost===100?"⚡":Math.ceil((100-hud.boost)*.03)}</span>{hud.boost===100?"BOOST":"COOL"}</button></div>
+      <div className="pedals"><button className="mine" aria-label="지뢰 설치" disabled={!hud.mine} onPointerDown={(e)=>{e.preventDefault();dropMine()}}><span>✹</span>{hud.mine?"MINE":"USED"}</button><button className="brake" aria-label="브레이크" {...bind("brake")}>BRAKE</button><button className="nitro" aria-label="부스터" disabled={hud.boost<100} onPointerDown={(e)=>{e.preventDefault();triggerBoost()}}><span>{hud.boost===100?"⚡":Math.ceil((100-hud.boost)*.03)}</span>{hud.boost===100?"BOOST":"COOL"}</button></div>
     </div>}
-    {phase==="menu"&&<section className="panel intro"><div className="eyebrow">6인 배틀 아레나</div><h1>BUMPER<br/><em>RUSH</em></h1><p>박고, 버티고, 끝까지 살아남아라!</p><button onClick={start}>경기 시작 <span>→</span></button><div className="tips"><span>◀ ▶ 조향</span><span>GO 가속</span><span>⚡ 부스터</span></div></section>}
+    {phase==="menu"&&<section className="panel intro"><div className="eyebrow">6인 배틀 아레나</div><h1>BUMPER<br/><em>RUSH</em></h1><p>박고, 버티고, 끝까지 살아남아라!</p><button onClick={start}>경기 시작 <span>→</span></button><div className="tips"><span>◒ 기울기 조향</span><span>자동 전진</span><span>⚡ 부스터</span></div></section>}
     {phase==="over"&&<section className="panel result"><div className="eyebrow">{won?"ARENA CHAMPION":"GAME OVER"}</div><h2>{won?"최후의 생존자!":"차량 파손!"}</h2><div className="final"><span><small>최종 점수</small>{hud.score.toLocaleString()}</span><span><small>최종 순위</small>{playerPlace}위</span></div><button onClick={start}>다시 도전 <span>↻</span></button></section>}
   </main>
 }
