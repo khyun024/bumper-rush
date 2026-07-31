@@ -18,11 +18,13 @@ export default function Home() {
   const phaseRef = useRef<Phase>("menu");
   const input = useRef({ left:false,right:false,gas:false,brake:false,boost:false });
   const joystick = useRef({ steer:0, pointerId:-1 });
+  const spatial = useRef({ enabled:false, steer:0, movement:0 });
   const voiceRecognition = useRef<VoiceRecognition|null>(null);
   const voiceEnabled = useRef(false);
   const game = useRef({ cars:[] as Car[], particles:[] as Particle[], pickups:[] as Pickup[], mines:[] as Mine[], time:75, boost:100, boostTime:0, boostCooldown:0, score:0, shake:0 });
   const [phase,setPhaseState] = useState<Phase>("menu");
   const [stickX,setStickX] = useState(0);
+  const [spatialMode,setSpatialMode] = useState<"off"|"on"|"unsupported">("off");
   const [voiceStatus,setVoiceStatus] = useState<"off"|"listening"|"unsupported">("off");
   const [hud,setHud] = useState({hp:100,time:75,boost:100,score:0,alive:6,rank:1,mine:true});
 
@@ -84,6 +86,18 @@ export default function Home() {
     if(joystick.current.pointerId!==e.pointerId)return;
     joystick.current.pointerId=-1;joystick.current.steer=0;setStickX(0);
   };
+  const toggleSpatialMode = async () => {
+    if(spatial.current.enabled){
+      spatial.current={enabled:false,steer:0,movement:0};setSpatialMode("off");return;
+    }
+    try{
+      const Motion=DeviceMotionEvent as typeof DeviceMotionEvent & {requestPermission?:()=>Promise<PermissionState>};
+      const Orientation=DeviceOrientationEvent as typeof DeviceOrientationEvent & {requestPermission?:()=>Promise<PermissionState>};
+      if(Motion.requestPermission&&await Motion.requestPermission()!=="granted")return;
+      if(Orientation.requestPermission&&await Orientation.requestPermission()!=="granted")return;
+      spatial.current.enabled=true;spatial.current.movement=0;joystick.current.steer=0;setStickX(0);setSpatialMode("on");
+    }catch{setSpatialMode("unsupported");}
+  };
   const bind = (key:keyof typeof input.current) => ({
     onPointerDown:(e:React.PointerEvent)=>{ e.preventDefault(); input.current[key]=true; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); },
     onPointerUp:()=>input.current[key]=false,
@@ -98,6 +112,19 @@ export default function Home() {
     resize(); addEventListener("resize",resize);
     const key=(e:KeyboardEvent,v:boolean)=>{if(["ArrowDown","s","S"].includes(e.key))input.current.brake=v;if(e.code==="Space"&&v)triggerBoost(); };
     const kd=(e:KeyboardEvent)=>key(e,true), ku=(e:KeyboardEvent)=>key(e,false);addEventListener("keydown",kd);addEventListener("keyup",ku);
+    const motion=(e:DeviceMotionEvent)=>{
+      if(!spatial.current.enabled)return;
+      const a=e.accelerationIncludingGravity;
+      if(!a)return;
+      const magnitude=Math.hypot(a.x||0,a.y||0,a.z||0);
+      const activity=Math.max(0,Math.min(1.25,Math.abs(magnitude-9.81)/2.7));
+      spatial.current.movement=spatial.current.movement*.78+activity*.22;
+    };
+    const orient=(e:DeviceOrientationEvent)=>{
+      if(!spatial.current.enabled)return;
+      spatial.current.steer=Math.max(-1,Math.min(1,(e.gamma||0)/28));
+    };
+    addEventListener("devicemotion",motion);addEventListener("deviceorientation",orient);
     function spark(x:number,y:number,color:string,n=8){ for(let i=0;i<n;i++){const a=Math.random()*TAU,s=90+Math.random()*260;game.current.particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:.25+Math.random()*.35,color});}}
     function update(dt:number){
       const g=game.current;if(phaseRef.current!=="playing")return;
@@ -105,9 +132,9 @@ export default function Home() {
       g.boostTime=Math.max(0,g.boostTime-dt);g.boostCooldown=Math.max(0,g.boostCooldown-dt);
       const p=g.cars[0]; if(p.dead)return;
       const inp=input.current; const speed=Math.hypot(p.vx,p.vy);
-      const steer=joystick.current.steer;
+      const steer=spatial.current.enabled?spatial.current.steer:joystick.current.steer;
       p.a+=Math.max(-1,Math.min(1,steer))*3.05*dt*(.45+Math.min(speed/210,1));
-      let thrust=420;if(inp.brake)thrust=-230;
+      let thrust=spatial.current.enabled?Math.max(0,spatial.current.movement-.06)*620:420;if(inp.brake)thrust=-230;
       if(g.boostTime>0){thrust=760;if(Math.random()<.75)spark(p.x-Math.cos(p.a)*38,p.y-Math.sin(p.a)*38,Math.random()>.45?"#42e8ff":"#d8ff45",2);}
       p.vx+=Math.cos(p.a)*thrust*dt;p.vy+=Math.sin(p.a)*thrust*dt;
       g.cars.forEach((car,i)=>{
@@ -241,7 +268,7 @@ export default function Home() {
       const vignette=ctx.createRadialGradient(w/2,h/2,Math.min(w,h)*.25,w/2,h/2,Math.max(w,h)*.72);vignette.addColorStop(.55,"transparent");vignette.addColorStop(1,"rgba(0,0,0,.65)");ctx.fillStyle=vignette;ctx.fillRect(0,0,w,h);
     }
     function loop(now:number){const dt=Math.min(.033,(now-last)/1000);last=now;update(dt);draw();raf=requestAnimationFrame(loop)}raf=requestAnimationFrame(loop);
-    return()=>{cancelAnimationFrame(raf);removeEventListener("resize",resize);removeEventListener("keydown",kd);removeEventListener("keyup",ku)};
+    return()=>{cancelAnimationFrame(raf);removeEventListener("resize",resize);removeEventListener("keydown",kd);removeEventListener("keyup",ku);removeEventListener("devicemotion",motion);removeEventListener("deviceorientation",orient)};
   },[init]);
 
   const playerPlace=game.current.cars[0]?.place||hud.rank;
@@ -259,10 +286,12 @@ export default function Home() {
     {(phase==="playing"||phase==="countdown")&&<div className="meters">
       <label>내구도 <b>{hud.hp}</b><span><i style={{width:`${hud.hp}%`}}/></span></label>
       <label>부스터 <b>{hud.boost===100?"READY":`${Math.ceil((100-hud.boost)*.03)}초`}</b><span className="blue"><i style={{width:`${hud.boost}%`}}/></span></label>
-      <div className="sensor-off">센서 OFF · 조이스틱 조작</div>
+      <button className={`spatial-toggle ${spatialMode}`} onClick={toggleSpatialMode}>
+        {spatialMode==="on"?"공간 모드 ON · 움직여서 운전":spatialMode==="unsupported"?"공간 모드 미지원":"공간 모드 켜기"}
+      </button>
     </div>}
     {(phase==="playing"||phase==="countdown")&&<div className="controls">
-      <div className="joystick" aria-label="방향 조이스틱" onPointerDown={(e)=>{e.preventDefault();joystick.current.pointerId=e.pointerId;e.currentTarget.setPointerCapture(e.pointerId);moveJoystick(e)}} onPointerMove={moveJoystick} onPointerUp={releaseJoystick} onPointerCancel={releaseJoystick}>
+      <div className={`joystick ${spatialMode==="on"?"hidden":""}`} aria-label="방향 조이스틱" onPointerDown={(e)=>{e.preventDefault();joystick.current.pointerId=e.pointerId;e.currentTarget.setPointerCapture(e.pointerId);moveJoystick(e)}} onPointerMove={moveJoystick} onPointerUp={releaseJoystick} onPointerCancel={releaseJoystick}>
         <div className="joystick-knob" style={{transform:`translate(${stickX*34}px,-50%)`}} />
       </div>
       <div className="pedals"><button className="mine" aria-label="지뢰 설치" disabled={!hud.mine} onPointerDown={(e)=>{e.preventDefault();dropMine()}}><span>✹</span>{hud.mine?"MINE":"USED"}</button><button className="brake" aria-label="브레이크" {...bind("brake")}>BRAKE</button><button className="nitro" aria-label="부스터" disabled={hud.boost<100} onPointerDown={(e)=>{e.preventDefault();triggerBoost()}}><span>{hud.boost===100?"⚡":Math.ceil((100-hud.boost)*.03)}</span>{hud.boost===100?"BOOST":"COOL"}</button></div>
