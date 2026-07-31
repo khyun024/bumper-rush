@@ -18,7 +18,7 @@ export default function Home() {
   const phaseRef = useRef<Phase>("menu");
   const input = useRef({ left:false,right:false,gas:false,brake:false,boost:false });
   const joystick = useRef({ steer:0, pointerId:-1 });
-  const spatial = useRef({ enabled:false, steer:0, movement:0 });
+  const spatial = useRef({ enabled:false, steer:0, movement:0, lastStep:0 });
   const voiceRecognition = useRef<VoiceRecognition|null>(null);
   const voiceEnabled = useRef(false);
   const game = useRef({ cars:[] as Car[], particles:[] as Particle[], pickups:[] as Pickup[], mines:[] as Mine[], time:75, boost:100, boostTime:0, boostCooldown:0, score:0, shake:0 });
@@ -88,14 +88,14 @@ export default function Home() {
   };
   const toggleSpatialMode = async () => {
     if(spatial.current.enabled){
-      spatial.current={enabled:false,steer:0,movement:0};setSpatialMode("off");return;
+      spatial.current={enabled:false,steer:0,movement:0,lastStep:0};setSpatialMode("off");return;
     }
     try{
       const Motion=DeviceMotionEvent as typeof DeviceMotionEvent & {requestPermission?:()=>Promise<PermissionState>};
       const Orientation=DeviceOrientationEvent as typeof DeviceOrientationEvent & {requestPermission?:()=>Promise<PermissionState>};
       if(Motion.requestPermission&&await Motion.requestPermission()!=="granted")return;
       if(Orientation.requestPermission&&await Orientation.requestPermission()!=="granted")return;
-      spatial.current.enabled=true;spatial.current.movement=0;joystick.current.steer=0;setStickX(0);setSpatialMode("on");
+      spatial.current.enabled=true;spatial.current.movement=0;spatial.current.lastStep=0;joystick.current.steer=0;setStickX(0);setSpatialMode("on");
     }catch{setSpatialMode("unsupported");}
   };
   const bind = (key:keyof typeof input.current) => ({
@@ -114,11 +114,17 @@ export default function Home() {
     const kd=(e:KeyboardEvent)=>key(e,true), ku=(e:KeyboardEvent)=>key(e,false);addEventListener("keydown",kd);addEventListener("keyup",ku);
     const motion=(e:DeviceMotionEvent)=>{
       if(!spatial.current.enabled)return;
-      const a=e.accelerationIncludingGravity;
-      if(!a)return;
-      const magnitude=Math.hypot(a.x||0,a.y||0,a.z||0);
-      const activity=Math.max(0,Math.min(1.25,Math.abs(magnitude-9.81)/2.7));
-      spatial.current.movement=spatial.current.movement*.78+activity*.22;
+      const linear=e.acceleration;
+      const gravity=e.accelerationIncludingGravity;
+      if(!linear&&!gravity)return;
+      const linearForce=linear?Math.hypot(linear.x||0,linear.y||0,linear.z||0):0;
+      const gravityForce=gravity?Math.abs(Math.hypot(gravity.x||0,gravity.y||0,gravity.z||0)-9.81):0;
+      const stepForce=Math.max(linearForce,gravityForce);
+      const now=performance.now();
+      if(stepForce>.75&&now-spatial.current.lastStep>240){
+        spatial.current.lastStep=now;
+        spatial.current.movement=Math.min(1.35,spatial.current.movement+.9);
+      }
     };
     const orient=(e:DeviceOrientationEvent)=>{
       if(!spatial.current.enabled)return;
@@ -132,9 +138,10 @@ export default function Home() {
       g.boostTime=Math.max(0,g.boostTime-dt);g.boostCooldown=Math.max(0,g.boostCooldown-dt);
       const p=g.cars[0]; if(p.dead)return;
       const inp=input.current; const speed=Math.hypot(p.vx,p.vy);
+      if(spatial.current.enabled)spatial.current.movement=Math.max(0,spatial.current.movement-dt*1.05);
       const steer=spatial.current.enabled?spatial.current.steer:joystick.current.steer;
       p.a+=Math.max(-1,Math.min(1,steer))*3.05*dt*(.45+Math.min(speed/210,1));
-      let thrust=spatial.current.enabled?Math.max(0,spatial.current.movement-.06)*620:420;if(inp.brake)thrust=-230;
+      let thrust=spatial.current.enabled?spatial.current.movement*720:420;if(inp.brake)thrust=-230;
       if(g.boostTime>0){thrust=760;if(Math.random()<.75)spark(p.x-Math.cos(p.a)*38,p.y-Math.sin(p.a)*38,Math.random()>.45?"#42e8ff":"#d8ff45",2);}
       p.vx+=Math.cos(p.a)*thrust*dt;p.vy+=Math.sin(p.a)*thrust*dt;
       g.cars.forEach((car,i)=>{
@@ -287,7 +294,7 @@ export default function Home() {
       <label>내구도 <b>{hud.hp}</b><span><i style={{width:`${hud.hp}%`}}/></span></label>
       <label>부스터 <b>{hud.boost===100?"READY":`${Math.ceil((100-hud.boost)*.03)}초`}</b><span className="blue"><i style={{width:`${hud.boost}%`}}/></span></label>
       <button className={`spatial-toggle ${spatialMode}`} onClick={toggleSpatialMode}>
-        {spatialMode==="on"?"공간 모드 ON · 움직여서 운전":spatialMode==="unsupported"?"공간 모드 미지원":"공간 모드 켜기"}
+        {spatialMode==="on"?"공간 모드 ON · 걸으면 전진":spatialMode==="unsupported"?"공간 모드 미지원":"공간 모드 켜기"}
       </button>
     </div>}
     {(phase==="playing"||phase==="countdown")&&<div className="controls">
